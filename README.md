@@ -46,7 +46,9 @@ few bytes and reports errors.
 
 Fastest of 100–200 samples per call, before (1.0.2) and after SIMD, with
 Roc 0.1.0_RC1 and `--opt=speed`: arm64 and WebAssembly (in Node.js 24) on an
-Apple M5 Pro, x86-64 on a GitHub Actions runner (Xeon Platinum 8573C).
+Apple M5 Pro, x86-64 on a GitHub Actions runner (Xeon Platinum 8573C). The
+x86-64 rows are the median of three such runs. A ratio below 1× is a
+slowdown.
 
 | Target | Input | Encode before | Encode after | Decode before | Decode after |
 | --- | --- | ---: | ---: | ---: | ---: |
@@ -54,18 +56,23 @@ Apple M5 Pro, x86-64 on a GitHub Actions runner (Xeon Platinum 8573C).
 | native (arm64) | 64 B | 53 ns | **24 ns** (2.2×) | 45 ns | **20 ns** (2.3×) |
 | x86-64 (AVX2, the default) | 1 MiB | 1847 µs | **258 µs** (7.2×) | 1475 µs | **201 µs** (7.3×) |
 | x86-64 (AVX2, the default) | 64 B | 140 ns | **58 ns** (2.4×) | 103 ns | **49 ns** (2.1×) |
-| `x64v1` (SSE2 only) | 1 MiB | 1704 µs | 1745 µs | 1585 µs | 1901 µs (0.8×) |
-| `x64v1` (SSE2 only) | 64 B | 127 ns | 133 ns | 114 ns | 150 ns (0.8×) |
+| `x64v1` (SSE2 only) | 1 MiB | 1704 µs | 1745 µs (0.98×) | 1585 µs | 1901 µs (0.83×) |
+| `x64v1` (SSE2 only) | 64 B | 127 ns | 133 ns (0.95×) | 114 ns | 150 ns (0.76×) |
 | `wasm32` (simd128) | 1 MiB | 1053 µs | 942 µs (1.1×) | 1053 µs | 967 µs (1.1×) |
-| `wasm32` (simd128) | 64 B | 77 ns | 80 ns | 56 ns | 78 ns (0.7×) |
-| `wasm32v1` (no SIMD) | 1 MiB | 1195 µs | 1247 µs | 1027 µs | 1741 µs (0.6×) |
-| `wasm32v1` (no SIMD) | 64 B | 87 ns | 100 ns | 56 ns | 118 ns (0.5×) |
+| `wasm32` (simd128) | 64 B | 77 ns | 80 ns (0.96×) | 56 ns | 78 ns (0.72×) |
+| `wasm32v1` (no SIMD) | 1 MiB | 1195 µs | 1247 µs (0.96×) | 1027 µs | 1741 µs (0.59×) |
+| `wasm32v1` (no SIMD) | 64 B | 87 ns | 100 ns (0.87×) | 56 ns | 118 ns (0.47×) |
 
-Roc gives x86-64 (AVX2 level by default), ARM64 (NEON) and `wasm32`
-(simd128) native vector instructions. On `wasm32v1` and `x64v1` the vectors
-become scalar or partly scalar code, which is slower than the plain scalar
-loop for decoding. On `wasm32`, Roc 0.1.0_RC1 compiles some of the vector
-operations lane by lane, so SIMD gains little there yet.
+Roc gives x86-64 (AVX2 level by default) and ARM64 (NEON) native vector
+instructions, and there it is much faster at every size. Elsewhere it costs:
+
+- On `wasm32v1` and `x64v1` the vectors become scalar or partly scalar code.
+  Decoding is 1.2–2.1× slower than the plain scalar loop, and encoding up to
+  1.15× slower.
+- On `wasm32` (simd128), Roc 0.1.0_RC1 compiles some of the vector
+  operations lane by lane: the decoder's table lookups become one load per
+  lane instead of `i8x16.swizzle`. Large inputs gain about 10%, but decoding
+  small inputs, such as tokens in URLs, is about 1.4× slower.
 
 The other backends, on 1 MiB on the M5 Pro:
 

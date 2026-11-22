@@ -8,4 +8,4 @@
 generated-docs/
 
 bench/wasm/platform/targets/
-*.wasm
+bench/wasm/*.wasm

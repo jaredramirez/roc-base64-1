@@ -66,21 +66,14 @@ Base64 := [].{
 
 encode_with : List(U8), Alphabet, Bool -> Str
 encode_with = |bytes, alphabet, pad| {
-	len = bytes.len()
-	var $out = List.with_capacity((len / 3 + 1) * 4)
-
-	# 12 bytes at a time with SIMD while a whole 16-byte vector can be
-	# loaded, then `encode_loop` for the rest
-	var $pos = 0
-	while $pos + 16 <= len {
-		$out = encode12(load16(bytes, $pos), alphabet.encode_offsets).append_to($out)
-		$pos = $pos + 12
-	}
-	encoded = encode_loop(bytes, $pos, alphabet.char62, alphabet.char63, pad, $out)
+	# SIMD for the bulk, then `encode_loop` for the rest
+	out = List.with_capacity((bytes.len() / 3 + 1) * 4)
+	(simd_out, pos) = encode_chunks(bytes, out, alphabet.encode_offsets)
+	encoded = encode_loop(bytes, pos, alphabet.char62, alphabet.char63, pad, simd_out)
 	match Str.from_utf8(encoded) {
 		Ok(s) => s
 
-		# Unreachable: sextet_char only emits ASCII
+		# Unreachable: sextet_char and the SIMD offsets only produce ASCII
 		Err(_) => ""
 	}
 }
@@ -329,6 +322,19 @@ encode_offsets = |char62, char63| {
 			.concat(List.repeat((48.U8).minus_wrap(52), 10))
 			.concat([char62.minus_wrap(62), char63.minus_wrap(63), 65, 0, 0]),
 	)
+}
+
+## Encode `bytes` 12 at a time while a whole 16-byte vector can be loaded,
+## appending to `out`. Returns the output and how many bytes were encoded.
+encode_chunks : List(U8), List(U8), U8x16 -> (List(U8), U64)
+encode_chunks = |bytes, out, offsets| {
+	var $out = out
+	var $pos = 0
+	while $pos + 16 <= bytes.len() {
+		$out = encode12(load16(bytes, $pos), offsets).append_to($out)
+		$pos = $pos + 12
+	}
+	($out, $pos)
 }
 
 ## Decode `chars` up to `end`, 16 at a time, appending to `out`, until a
@@ -641,15 +647,51 @@ expect lengths.all(
 		),
 )
 
-# Every character of both alphabets decodes in every lane of a chunk
+## The alphabet rotated by 0 to 15 places, one after another: 1024
+## characters, all decoded by SIMD, with every character in every lane
+rotations : Str -> List(U8)
+rotations = |chars| {
+	a = chars.to_utf8()
+	List.from_iter((0.U64).until(16)).fold([], |text, k| text.concat(a.drop_first(k)).concat(a.take_first(k)))
+}
+
+# Every character of both alphabets decodes correctly in every lane
 expect {
-	text = standard_chars.to_utf8().concat(standard_chars.to_utf8().drop_first(3)).take_first(124)
+	text = rotations(standard_chars)
 	Base64.decode(ascii(text)).map_ok(|bytes| reference_encode(bytes, standard_chars, Bool.True)) == Ok(text)
 }
 
 expect {
-	text = url_safe_chars.to_utf8().concat(url_safe_chars.to_utf8().drop_first(3)).take_first(124)
+	text = rotations(url_safe_chars)
 	Base64.decode_url(ascii(text)).map_ok(|bytes| reference_encode(bytes, url_safe_chars, Bool.True)) == Ok(text)
+}
+
+# The SIMD loops run: the tests above give the same results with or without
+# them, so check how far they get directly
+expect {
+	text = rotations(standard_chars)
+	(_, end) = decode_chunks(text, text.len(), [], standard.decode_tables)
+	end == text.len()
+}
+
+expect {
+	# An invalid character stops decoding at the start of its chunk
+	text = replace_at(rotations(standard_chars), 40, 33)
+	(_, end) = decode_chunks(text, text.len(), [], standard.decode_tables)
+	end == 32
+}
+
+expect {
+	# Fewer than 16 characters left are left to the scalar loop
+	text = rotations(standard_chars).take_first(63)
+	(decoded, end) = decode_chunks(text, text.len(), [], standard.decode_tables)
+	end == 48 and reference_encode(decoded, standard_chars, Bool.True) == text.take_first(48)
+}
+
+expect {
+	bytes = pattern(40, 3)
+	(encoded, end) = encode_chunks(bytes, [], standard.encode_offsets)
+	end == 36 and encoded == reference_encode(bytes.take_first(36), standard_chars, Bool.True)
 }
 
 # Every byte value is accepted or rejected correctly in every lane of a SIMD
@@ -665,7 +707,7 @@ classified_in_every_lane = |chars, decoder| {
 				|position| {
 					result = decoder(ascii(replace_at(valid, position, byte)))
 					if chars.to_utf8().contains(byte) {
-						result.is_ok()
+						result.map_ok(|bytes| reference_encode(bytes, chars, Bool.True)) == Ok(replace_at(valid, position, byte))
 					} else {
 						result == Err(InvalidCharacter)
 					}
@@ -707,8 +749,9 @@ expect {
 	)
 }
 
-# Non-canonical trailing bits right after SIMD chunks are accepted, as for
-# short inputs
+# Non-canonical trailing bits are still accepted after SIMD chunks. The
+# last group is always decoded by the scalar loop, so this checks the
+# hand-off.
 expect {
 	bytes = pattern(49, 13)
 	text = reference_encode(bytes, standard_chars, Bool.True)
