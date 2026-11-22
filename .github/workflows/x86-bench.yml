@@ -1,0 +1,30 @@
+name: x86 benchmark
+
+on:
+  workflow_dispatch:
+
+jobs:
+  bench:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Install Roc 0.1.0_RC1
+        run: |
+          curl -fsSL -o roc.tar.gz https://github.com/roc-lang/roc/releases/download/0.1.0_RC1/roc-linux_x86_64-0.1.0_RC1.tar.gz
+          echo "043c426ea85dcdbd427951eaed246f0c10c171d988f2598782233a6dae43379d  roc.tar.gz" | sha256sum -c
+          mkdir -p "$RUNNER_TEMP/roc"
+          tar -xzf roc.tar.gz -C "$RUNNER_TEMP/roc"
+          dirname "$(find "$RUNNER_TEMP/roc" -type f -name roc | head -1)" >> "$GITHUB_PATH"
+
+      - run: roc version
+
+      # 1.0.2, the code before SIMD
+      - name: Check out the baseline
+        run: git worktree add "$RUNNER_TEMP/before" 3602e95
+
+      - name: Benchmark
+        shell: bash
+        run: bench/x86/run.sh "$RUNNER_TEMP/before" "$GITHUB_WORKSPACE" | tee -a "$GITHUB_STEP_SUMMARY"

@@ -44,14 +44,18 @@ Instructions"](https://arxiv.org/abs/1704.00605), with Roc's 16-byte vectors.
 The results are identical to the scalar code, which still handles the last
 few bytes and reports errors.
 
-Fastest of 100–200 samples per call, before (1.0.2) and after SIMD, on an
-Apple M5 Pro with Roc 0.1.0_RC1 and `--opt=speed`. WebAssembly runs in
-Node.js 24.
+Fastest of 100–200 samples per call, before (1.0.2) and after SIMD, with
+Roc 0.1.0_RC1 and `--opt=speed`: arm64 and WebAssembly (in Node.js 24) on an
+Apple M5 Pro, x86-64 on a GitHub Actions runner (Xeon Platinum 8573C).
 
 | Target | Input | Encode before | Encode after | Decode before | Decode after |
 | --- | --- | ---: | ---: | ---: | ---: |
 | native (arm64) | 1 MiB | 760 µs | **88 µs** (8.6×) | 865 µs | **100 µs** (8.7×) |
 | native (arm64) | 64 B | 53 ns | **24 ns** (2.2×) | 45 ns | **20 ns** (2.3×) |
+| x86-64 (AVX2, the default) | 1 MiB | 1847 µs | **258 µs** (7.2×) | 1475 µs | **201 µs** (7.3×) |
+| x86-64 (AVX2, the default) | 64 B | 140 ns | **58 ns** (2.4×) | 103 ns | **49 ns** (2.1×) |
+| `x64v1` (SSE2 only) | 1 MiB | 1704 µs | 1745 µs | 1585 µs | 1901 µs (0.8×) |
+| `x64v1` (SSE2 only) | 64 B | 127 ns | 133 ns | 114 ns | 150 ns (0.8×) |
 | `wasm32` (simd128) | 1 MiB | 1053 µs | 942 µs (1.1×) | 1053 µs | 967 µs (1.1×) |
 | `wasm32` (simd128) | 64 B | 77 ns | 80 ns | 56 ns | 78 ns (0.7×) |
 | `wasm32v1` (no SIMD) | 1 MiB | 1195 µs | 1247 µs | 1027 µs | 1741 µs (0.6×) |
@@ -59,9 +63,17 @@ Node.js 24.
 
 Roc gives x86-64 (AVX2 level by default), ARM64 (NEON) and `wasm32`
 (simd128) native vector instructions. On `wasm32v1` and `x64v1` the vectors
-become scalar code, which is slower than the plain scalar loop, especially
-for decoding. On `wasm32`, Roc 0.1.0_RC1 compiles some of the vector
+become scalar or partly scalar code, which is slower than the plain scalar
+loop for decoding. On `wasm32`, Roc 0.1.0_RC1 compiles some of the vector
 operations lane by lane, so SIMD gains little there yet.
+
+The other backends, on 1 MiB on the M5 Pro:
+
+| Backend | Encode before | Encode after | Decode before | Decode after |
+| --- | ---: | ---: | ---: | ---: |
+| `--opt=dev` | 28.9 ms | 7.6 ms (3.8×) | 34.8 ms | 9.8 ms (3.6×) |
+| `--opt=size` | 2.65 ms | 2.01 ms (1.3×) | 2.15 ms | 2.11 ms (1.0×) |
+| interpreter | 887 ms | 168 ms (5.3×) | 1121 ms | 235 ms (4.8×) |
 
 See [bench](bench) to reproduce these.
 
