@@ -36,6 +36,35 @@ main! = |_| {
 
 See [examples](examples) for a runnable program.
 
+## Performance
+
+Encoding and decoding use SIMD for the bulk of the input, following Wojciech
+Muła and Daniel Lemire, ["Faster Base64 Encoding and Decoding using AVX2
+Instructions"](https://arxiv.org/abs/1704.00605), with Roc's 16-byte vectors.
+The results are identical to the scalar code, which still handles the last
+few bytes and reports errors.
+
+Fastest of 100–200 samples per call, before (1.0.2) and after SIMD, on an
+Apple M5 Pro with Roc 0.1.0_RC1 and `--opt=speed`. WebAssembly runs in
+Node.js 24.
+
+| Target | Input | Encode before | Encode after | Decode before | Decode after |
+| --- | --- | ---: | ---: | ---: | ---: |
+| native (arm64) | 1 MiB | 760 µs | **88 µs** (8.6×) | 865 µs | **100 µs** (8.7×) |
+| native (arm64) | 64 B | 53 ns | **24 ns** (2.2×) | 45 ns | **20 ns** (2.3×) |
+| `wasm32` (simd128) | 1 MiB | 1053 µs | 942 µs (1.1×) | 1053 µs | 967 µs (1.1×) |
+| `wasm32` (simd128) | 64 B | 77 ns | 80 ns | 56 ns | 78 ns (0.7×) |
+| `wasm32v1` (no SIMD) | 1 MiB | 1195 µs | 1247 µs | 1027 µs | 1741 µs (0.6×) |
+| `wasm32v1` (no SIMD) | 64 B | 87 ns | 100 ns | 56 ns | 118 ns (0.5×) |
+
+Roc gives x86-64 (AVX2 level by default), ARM64 (NEON) and `wasm32`
+(simd128) native vector instructions. On `wasm32v1` and `x64v1` the vectors
+become scalar code, which is slower than the plain scalar loop, especially
+for decoding. On `wasm32`, Roc 0.1.0_RC1 compiles some of the vector
+operations lane by lane, so SIMD gains little there yet.
+
+See [bench](bench) to reproduce these.
+
 ## Documentation
 
 View the brief API documentation at [https://niclas-ahden.github.io/roc-base64/](https://niclas-ahden.github.io/roc-base64/).
