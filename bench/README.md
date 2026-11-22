@@ -34,5 +34,4 @@ node run.mjs v1.wasm 1048576 100
 
 `x86/run.sh BEFORE_DIR AFTER_DIR` benchmarks two checkouts on x86-64 Linux,
 built for the default target (AVX2) and for `x64v1musl` (SSE2 only), and
-prints a table. `.github/workflows/x86-bench.yml` runs it on a GitHub runner
-against 1.0.2 when started from the Actions tab.
+prints a table. It needs `roc` and `objdump` on the PATH.
