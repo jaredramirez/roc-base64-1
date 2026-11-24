@@ -6,6 +6,3 @@
 .direnv/
 .envrc
 generated-docs/
-
-bench/wasm/platform/targets/
-bench/wasm/*.wasm

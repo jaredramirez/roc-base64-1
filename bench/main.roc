@@ -13,11 +13,11 @@ import base64.Base64
 ##
 ## Encodes and decodes SIZE bytes ITERATIONS times each, after two warm-up
 ## runs, and prints the fastest encode and decode in nanoseconds per call.
-## bench/wasm/ runs the same measurement on WebAssembly.
+## SIZE must be at least 1.
 main! : List(OsStr) => Try({}, _)
 main! = |os_args|
 	match os_args.map(OsStr.display).map(U64.from_str) {
-		[Ok(size), Ok(iterations)] => {
+		[Ok(size), Ok(iterations)] if size > 0 => {
 			bytes = List.from_iter((0.U64).until(size)).map(|i| (i * 31 + 7).to_u8_wrap())
 			text = Base64.encode(bytes)
 			if Base64.decode(text) != Ok(bytes) {
@@ -25,7 +25,7 @@ main! = |os_args|
 				return Err(Exit(1))
 			}
 			# Each sample times enough calls to cover 256 KiB, for timer resolution
-			reps = if (size == 0) 1 else (262144 + size - 1) / size
+			reps = (262144 + size - 1) / size
 			encode_ns = best!(iterations, reps, |{}| Base64.encode(bytes).to_utf8().len())
 			decode_ns = best!(
 				iterations,
