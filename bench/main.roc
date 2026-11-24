@@ -9,11 +9,8 @@ import pf.Stderr
 import pf.Stdout
 import base64.Base64
 
-## Usage: roc build --opt=speed --output=bench/bench bench/main.roc && ./bench/bench SIZE ITERATIONS
-##
-## Encodes and decodes SIZE bytes ITERATIONS times each, after two warm-up
-## runs, and prints the fastest encode and decode in nanoseconds per call.
-## SIZE must be at least 1.
+## Encodes and decodes SIZE bytes and prints the fastest of ITERATIONS
+## samples of each, in nanoseconds per call. See README.md to run it.
 main! : List(OsStr) => Try({}, _)
 main! = |os_args|
 	match os_args.map(OsStr.display).map(U64.from_str) {
@@ -39,7 +36,7 @@ main! = |os_args|
 			Ok({})
 		}
 		_ => {
-			Stderr.line!("Usage: bench/main.roc SIZE ITERATIONS")?
+			Stderr.line!("Usage: ./bench/bench SIZE ITERATIONS, with SIZE at least 1")?
 			Err(Exit(1))
 		}
 	}
@@ -51,11 +48,14 @@ best! = |iterations, reps, f| {
 	_warm1 = f({})
 	_warm2 = f({})
 	var $min = 0xFFFF_FFFF_FFFF_FFFF.U64
-	for _ in List.from_iter((0.U64).until(iterations)) {
+	var $sample = 0
+	while $sample < iterations {
 		start = Monotonic.now!()
 		var $len = 0
-		for _ in List.from_iter((0.U64).until(reps)) {
+		var $rep = 0
+		while $rep < reps {
 			$len = $len + f({})
+			$rep = $rep + 1
 		}
 		ns = start.elapsed!().to_nanos() / reps
 		if $len == 0 {
@@ -64,6 +64,7 @@ best! = |iterations, reps, f| {
 		if ns < $min {
 			$min = ns
 		}
+		$sample = $sample + 1
 	}
 	$min
 }

@@ -38,13 +38,9 @@ See [examples](examples) for a runnable program.
 
 ## Performance
 
-Encoding and decoding use SIMD for the bulk of the input, following Wojciech
-Muła and Daniel Lemire, ["Faster Base64 Encoding and Decoding using AVX2
-Instructions"](https://arxiv.org/abs/1704.00605). On arm64 and x86-64 that's
-about 7–9× faster than plain scalar code on large inputs and about 2× faster
-on 64 bytes. On `wasm32`, `wasm32v1` and `x64v1` the vector code is partly or
-fully scalar, so decoding can be slower, especially for small inputs. See
-[bench](bench) to measure it.
+Encoding and decoding use SIMD for the bulk of the input, following
+[Muła and Lemire](https://arxiv.org/abs/1704.00605), and [bench](bench)
+measures them.
 
 ## Documentation
 

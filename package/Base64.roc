@@ -68,7 +68,7 @@ encode_with : List(U8), Alphabet, Bool -> Str
 encode_with = |bytes, alphabet, pad| {
 	# SIMD for the bulk, then `encode_loop` for the rest
 	out = List.with_capacity((bytes.len() / 3 + 1) * 4)
-	(simd_out, pos) = encode_chunks(bytes, out, alphabet.encode_offsets)
+	(simd_out, pos) = encode_chunks(bytes, out, alphabet)
 	encoded = encode_loop(bytes, pos, alphabet.char62, alphabet.char63, pad, simd_out)
 	match Str.from_utf8(encoded) {
 		Ok(s) => s
@@ -249,10 +249,10 @@ sextet_value = |char, char62, char63|
 # Encoding and decoding use 16-byte vectors for the bulk of the input,
 # following Wojciech Muła and Daniel Lemire, "Faster Base64 Encoding and
 # Decoding using AVX2 Instructions" (2018, https://arxiv.org/abs/1704.00605),
-# with 16-byte vectors instead of 32. Roc lowers them to SSE/AVX on x86-64,
-# NEON on ARM and simd128 on wasm32. On targets that lack some of those
-# instructions (`x64v1`, `wasm32v1`) they become partly or fully scalar code.
-# The scalar loops above handle every tail and report every error.
+# with 16-byte vectors instead of 32. Roc lowers them to SSE/AVX on x86-64
+# and NEON on ARM. Elsewhere, including wasm32, some or all of them become
+# scalar code. The scalar loops above handle every tail and report every
+# error.
 
 # The characters for 62 and 63, and the SIMD tables built from them
 Alphabet : {
@@ -286,20 +286,26 @@ make_alphabet = |char62, char63| {
 				},
 		),
 	)
-	# For each slot, what to add to the characters in it to get their values
+	# For each slot, what to add to the characters in it to get their values.
+	# Characters are grouped by high nibble, but char63 shares its nibble with
+	# characters that need a different offset, so it uses slot nibble + 8.
 	offsets = nibbles.map(
 		|slot| List.from_iter((0.U32).until(64)).fold(
 			0.U8,
 			|offset, value| {
 				c = sextet_char(value, char62, char63)
-				if (decode_slot(c, char63) == slot) value.to_u8_wrap().minus_wrap(c) else offset
+				c_slot = if (c == char63) c.shr_zf_wrap(4) + 8 else c.shr_zf_wrap(4)
+				if (c_slot == slot) value.to_u8_wrap().minus_wrap(c) else offset
 			},
 		),
 	)
 	{
 		char62,
 		char63,
-		encode_offsets: encode_offsets(char62, char63),
+		# What to add to each range of values to reach its character; see
+		# `encode12`. 'a' - 26, then '0' - 52 (wrapped) for each of the ten
+		# digits, then the two alphabet-specific characters, then 'A'.
+		encode_offsets: vector([71, 252, 252, 252, 252, 252, 252, 252, 252, 252, 252, char62.minus_wrap(62), char63.minus_wrap(63), 65, 0, 0]),
 		decode_invalid_lo: vector(invalid_lo),
 		decode_offsets: vector(offsets),
 	}
@@ -310,7 +316,9 @@ load16 : List(U8), U64 -> U8x16
 load16 = |bytes, start|
 	match U8x16.load(bytes, start) {
 		Ok(v) => v
-		Err(OutOfBounds) => crash "load16 needs start + 16 <= len"
+
+		# Unreachable: the callers only load whole vectors
+		Err(_) => U8x16.splat(0)
 	}
 
 # A vector from a list of exactly 16 lanes
@@ -318,7 +326,9 @@ vector : List(U8) -> U8x16
 vector = |lanes|
 	match U8x16.from_list(lanes) {
 		Ok(v) => v
-		Err(WrongLength) => crash "vector needs exactly 16 lanes"
+
+		# Unreachable: every table has 16 lanes
+		Err(_) => U8x16.splat(0)
 	}
 
 # A 32-bit constant in every lane, viewed as 16-bit lanes
@@ -346,26 +356,14 @@ encode12 = |input, offsets| {
 encode_shuffle : U8x16
 encode_shuffle = vector([1, 0, 2, 1, 4, 3, 5, 4, 7, 6, 8, 7, 10, 9, 11, 10])
 
-# What to add to each range of values to reach its character; see `encode12`
-encode_offsets : U8, U8 -> U8x16
-encode_offsets = |char62, char63| {
-	# 'a' - 26, '0' - 52 for each of the ten digits, then the two
-	# alphabet-specific characters, then 'A'
-	vector(
-		[71]
-			.concat(List.repeat((48.U8).minus_wrap(52), 10))
-			.concat([char62.minus_wrap(62), char63.minus_wrap(63), 65, 0, 0]),
-	)
-}
-
 # Encode `bytes` 12 at a time while a whole 16-byte vector can be loaded,
 # appending to `out`. Returns the output and how many bytes were encoded.
-encode_chunks : List(U8), List(U8), U8x16 -> (List(U8), U64)
-encode_chunks = |bytes, out, offsets| {
+encode_chunks : List(U8), List(U8), Alphabet -> (List(U8), U64)
+encode_chunks = |bytes, out, alphabet| {
 	var $out = out
 	var $pos = 0
 	while $pos + 16 <= bytes.len() {
-		$out = encode12(load16(bytes, $pos), offsets).append_to($out)
+		$out = encode12(load16(bytes, $pos), alphabet.encode_offsets).append_to($out)
 		$pos = $pos + 12
 	}
 	($out, $pos)
@@ -406,7 +404,7 @@ decode16 = |input, alphabet| {
 			.all_lanes_set()
 
 	# Each character plus the offset for its slot gives its value; see
-	# `decode_slot`
+	# `make_alphabet`
 	is63 = input.eq_lanes(U8x16.splat(alphabet.char63))
 	values = input.plus_wrap(alphabet.decode_offsets.table_lookup(hi.bitwise_or(is63.bitwise_and(U8x16.splat(8)))))
 
@@ -416,12 +414,6 @@ decode16 = |input, alphabet| {
 	groups = pairs.bitwise_and(U32x4.splat(0xFFFF)).shl_wrap(12).bitwise_or(pairs.shr_zf_wrap(16))
 	{ bytes: groups.to_u8x16_bits().table_lookup(decode_shuffle), valid }
 }
-
-# Characters are grouped by high nibble to look up their offset. char63
-# shares a high nibble with characters that need a different offset, so it
-# uses slot nibble + 8.
-decode_slot : U8, U8 -> U8
-decode_slot = |c, char63| if (c == char63) c.shr_zf_wrap(4) + 8 else c.shr_zf_wrap(4)
 
 decode_pair_weights : I8x16
 decode_pair_weights = vector([64, 1, 64, 1, 64, 1, 64, 1, 64, 1, 64, 1, 64, 1, 64, 1]).to_i8x16_bits()
@@ -619,15 +611,17 @@ expect [standard, url_safe].all(
 # fewer than 16 characters to the scalar loop
 expect {
 	text = Base64.encode(List.repeat(0, 48).map_with_index(|_, index| (index * 167).to_u8_wrap())).to_utf8()
-	(_, bad_end) = decode_chunks(text.set(40, 33) ?? [], text.len(), [], standard)
+	(_, bad_end) = decode_chunks(text.take_first(40).append(33).concat(text.drop_first(41)), text.len(), [], standard)
 	(_, short_end) = decode_chunks(text, 63, [], standard)
 	bad_end == 32 and short_end == 48
 }
 
+# SIMD encodes 40 bytes up to 36, the last whole vector, and leaves the rest
+# to the scalar loop
 expect {
 	bytes = List.repeat(0, 40).map_with_index(|_, index| (index * 167).to_u8_wrap())
-	(encoded, end) = encode_chunks(bytes, [], standard.encode_offsets)
-	end == 36 and encoded == encode_loop(bytes.take_first(36), 0, 43, 47, Bool.True, [])
+	(encoded, end) = encode_chunks(bytes, [], standard)
+	end == 36 and encoded == encode_loop(bytes.take_first(36), 0, standard.char62, standard.char63, Bool.True, [])
 }
 
 # A bad character at any position of a long input is rejected, whether SIMD
@@ -638,7 +632,7 @@ expect {
 		|position|
 			[0, 10, 32, 33, 45, 61, 95, 46, 64, 91, 96, 123, 127].all(
 				# `=` in the last two positions is padding
-				|bad| (bad == 61 and position + 2 >= valid.len()) or Base64.decode(Str.from_utf8(valid.set(position, bad) ?? []) ?? "") == Err(InvalidCharacter),
+				|bad| (bad == 61 and position + 2 >= valid.len()) or Base64.decode(Str.from_utf8_lossy(valid.take_first(position).append(bad).concat(valid.drop_first(position + 1)))) == Err(InvalidCharacter),
 			),
 	)
 }
@@ -651,6 +645,8 @@ expect {
 expect {
 	bytes = List.repeat(0, 49).map_with_index(|_, index| (index * 167).to_u8_wrap())
 	text = Base64.encode(bytes).to_utf8()
-	last = text.get(65) ?? 0
-	Base64.decode(Str.from_utf8(text.set(65, last + 1) ?? []) ?? "") == Ok(bytes)
+	match text.get(65) {
+		Ok(c) => Base64.decode(Str.from_utf8_lossy(text.take_first(65).append(c + 1).concat(text.drop_first(66)))) == Ok(bytes)
+		Err(OutOfBounds) => Bool.False
+	}
 }
